@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>응답 내려받기 · 나의 일하는 방식</title>
+<style>
+  :root { --canvas: #f6f5f4; --surface: #fff; --ink: #1a1917; --muted: #615d59; --hair: #e6e6e6; --primary: #0075de; --primary-active: #005bab; --bad: #b3261e; }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--canvas); color: var(--ink); font: 16px/1.55 Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; word-break: keep-all; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 20px 72px; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
+  h2 { margin: 0 0 12px; font-size: 18px; }
+  p { margin: 8px 0 0; color: var(--muted); }
+  .card { margin-top: 20px; background: var(--surface); border: 1px solid var(--hair); border-radius: 16px; padding: 22px; }
+  label { display: block; font-weight: 700; margin-bottom: 8px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  input { flex: 1 1 220px; min-height: 48px; border: 1.5px solid var(--hair); border-radius: 12px; padding: 0 14px; font: inherit; }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  button { min-height: 48px; padding: 0 20px; border-radius: 12px; border: 1px solid var(--hair); background: var(--surface); font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button.primary:hover { background: var(--primary-active); }
+  button[disabled] { opacity: .4; cursor: not-allowed; }
+  #status { min-height: 24px; }
+  #status.bad { color: var(--bad); }
+  .big { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; color: var(--ink); line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--hair); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>응답 내려받기</h1>
+  <p>지금까지 서버에 저장된 전체 응답을 내려받습니다. 관리자 키가 필요합니다.</p>
+
+  <form class="card" id="keyForm">
+    <label for="key">관리자 키</label>
+    <div class="row">
+      <input id="key" type="password" autocomplete="off" required>
+      <button class="primary" type="submit" id="loadBtn">응답 불러오기</button>
+    </div>
+    <p id="status" role="status" aria-live="polite"></p>
+  </form>
+
+  <section class="card" id="result" hidden>
+    <h2>저장된 응답</h2>
+    <p class="big"><span id="count">0</span>건</p>
+    <p id="range"></p>
+    <div class="row" style="margin-top:16px">
+      <button class="primary" type="button" id="csvBtn">CSV로 저장</button>
+      <button type="button" id="jsonBtn">JSON으로 저장</button>
+    </div>
+    <p>CSV는 응답자 한 명이 한 행입니다. 엑셀에서 바로 열 수 있습니다. 이유·조건의 문구까지 필요하면 JSON을 쓰세요.</p>
+  </section>
+
+  <section class="card" id="types" hidden>
+    <h2>유형별 응답 수</h2>
+    <div class="scroll"><table id="typeTable"></table></div>
+  </section>
+</main>
+
+<script>
+/* 검사 화면(index.html)의 exportCSV()와 같은 열 순서. 문항을 바꾸면 여기도 함께 바꾼다. */
+const AXIS_ORDER = ['AL', 'CR', 'IE', 'XF'];
+const QUESTION_IDS = ['Q1', 'Q4', 'Q7', 'Q10', 'Q2', 'Q5', 'Q8', 'Q11', 'Q3', 'Q6', 'Q9', 'Q12']; // 화면 표시 순서
+let records = [];
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function toCSV(list) {
+  const head = ['sessionId', 'startedAt', 'completedAt', 'typeCode', 'typeName'];
+  AXIS_ORDER.forEach(k => head.push(`${k}_winner`, `${k}_winCount`));
+  QUESTION_IDS.forEach(q => head.push(`${q}_choice`, `${q}_scoredPole`, `${q}_responseTimeMs`, `${q}_changeCount`));
+  head.push('resultFitScore', 'selectedConflictAxis', 'skmsGuidanceScore', 'guidanceReason', 'conversationNote');
+  head.push('flipDilemmaAxis', 'flipDilemmaOriginalPole', 'flipDilemmaChoice', 'flipDilemmaChoicePole', 'didSwitchPole', 'flipDilemmaResponseTimeMs');
+  AXIS_ORDER.forEach(k => head.push(`boundary_${k}`));
+  head.push('boundaryOtherText', 'conversationNote2');
+  QUESTION_IDS.forEach(q => head.push(`${q}_reasonId`, `${q}_reasonText`, `${q}_reasonTimeMs`));
+  head.push('flipDilemmaChangeCount', 'flipReasonId', 'flipReasonText', 'boundaryQuestionPole', 'skmsGuidanceUnknown', 'skmsClarifyChoice',
+    'opinionSummarizedAt', 'conversationQuestion', 'conversationQuestion2', 'schemaVersion', 'contentVersion');
+  // 서버 수집본에만 있는 열 (맨 뒤)
+  head.push('receivedAt', 'flipReasonLabel', 'skmsClarifyLabel');
+  QUESTION_IDS.forEach(q => head.push(`${q}_reasonLabel`));
+
+  const cell = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+  const rows = list.map(r => {
+    const ax = r.axisScores || {}, rs = r.responses || [];
+    const find = q => rs.find(o => o.questionId === q) || {};
+    const row = [r.sessionId, r.startedAt, r.completedAt, r.typeCode, r.typeName];
+    AXIS_ORDER.forEach(k => row.push((ax[k] || {}).winner, (ax[k] || {}).winCount));
+    QUESTION_IDS.forEach(q => { const x = find(q); row.push(x.choice, x.scoredPole, x.responseTimeMs, x.changeCount); });
+    row.push(r.resultFitScore, r.selectedConflictAxis, r.skmsGuidanceScore, r.guidanceReason, r.conversationNote);
+    row.push(r.flipDilemmaAxis, r.flipDilemmaOriginalPole, r.flipDilemmaChoice, r.flipDilemmaChoicePole, r.didSwitchPole, r.flipDilemmaResponseTimeMs);
+    AXIS_ORDER.forEach(k => row.push(((r.boundaryConditions || {})[k] || []).join('|')));
+    row.push(r.boundaryOtherText, r.conversationNote2);
+    QUESTION_IDS.forEach(q => { const x = find(q); row.push(x.reasonId, x.reasonText, x.reasonTimeMs); });
+    row.push(r.flipDilemmaChangeCount, r.flipReasonId, r.flipReasonText, r.boundaryQuestionPole, r.skmsGuidanceUnknown, r.skmsClarifyChoice,
+      r.opinionSummarizedAt, r.conversationQuestion, r.conversationQuestion2, r.schemaVersion, r.contentVersion);
+    row.push(r.receivedAt, r.flipReasonLabel, r.skmsClarifyLabel);
+    QUESTION_IDS.forEach(q => row.push(find(q).reasonLabel));
+    return row.map(cell).join(',');
+  });
+  return '﻿' + [head.map(cell).join(','), ...rows].join('\r\n'); // 엑셀에서 한글이 깨지지 않도록 BOM
+}
+
+function download(name, text, mime) {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+
+function setStatus(msg, bad) { const s = $('status'); s.textContent = msg; s.className = bad ? 'bad' : ''; }
+
+$('keyForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = $('loadBtn');
+  btn.disabled = true;
+  setStatus('불러오는 중입니다…');
+  try {
+    const r = await fetch('/api/export', { headers: { 'x-admin-key': $('key').value }, cache: 'no-store' });
+    if (r.status === 401) { setStatus('관리자 키가 맞지 않습니다. 다시 확인해 주세요.', true); return; }
+    if (r.status === 503) { setStatus('서버에 관리자 키(ADMIN_KEY)가 설정되지 않았습니다. Vercel 프로젝트의 환경 변수를 확인해 주세요.', true); return; }
+    if (!r.ok) { setStatus('응답을 불러오지 못했습니다. 저장소(Blob) 연결을 확인한 뒤 다시 시도해 주세요.', true); return; }
+    records = (await r.json()).records || [];
+    $('count').textContent = records.length;
+    const times = records.map(x => x.receivedAt).filter(Boolean).sort();
+    $('range').textContent = times.length ? `처음 ${times[0].slice(0, 16).replace('T', ' ')} ~ 최근 ${times[times.length - 1].slice(0, 16).replace('T', ' ')} (UTC)` : '아직 저장된 응답이 없습니다.';
+    $('csvBtn').disabled = $('jsonBtn').disabled = records.length === 0;
+    $('result').hidden = false;
+    const by = {};
+    records.forEach(x => { const k = x.typeCode || '-'; (by[k] = by[k] || { n: 0, name: x.typeName || '' }).n += 1; });
+    const keys = Object.keys(by).sort((a, b) => by[b].n - by[a].n || a.localeCompare(b));
+    $('typeTable').innerHTML = '<tr><th>유형</th><th>코드</th><th>응답 수</th></tr>' + keys.map(k => `<tr><td>${esc(by[k].name)}</td><td>${esc(k)}</td><td>${by[k].n}</td></tr>`).join('');
+    $('types').hidden = records.length === 0;
+    setStatus(`${records.length}건을 불러왔습니다.`);
+  } catch (err) {
+    setStatus('서버에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.', true);
+  } finally { btn.disabled = false; }
+});
+$('csvBtn').addEventListener('click', () => download(`skms-work-type_responses_${stamp()}.csv`, toCSV(records), 'text/csv'));
+$('jsonBtn').addEventListener('click', () => download(`skms-work-type_responses_${stamp()}.json`, JSON.stringify(records, null, 2), 'application/json'));
+</script>
+</body>
+</html>
